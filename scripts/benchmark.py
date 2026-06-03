@@ -204,6 +204,15 @@ def benchmark_scale(es: Elasticsearch, scale: int, run_exact: bool) -> list[dict
     norms = np.linalg.norm(qvecs_raw, axis=1, keepdims=True)
     qvecs = (qvecs_raw / norms).tolist()
 
+    # Warmup — fire N_WARMUP silent queries to heat the JVM and OS page cache
+    # before any timed measurement.  Without this, the first method measured
+    # absorbs JIT-compilation and GC costs, making sequential scales look flat.
+    N_WARMUP = 5
+    console.print(f"  Warming up ({N_WARMUP} queries)...")
+    warmup_vec = qvecs[0]
+    for _ in range(N_WARMUP):
+        timed_search(es, query_hnsw(oid, warmup_vec, NUM_CANDIDATES_VARIANTS[0]))
+
     rows = []
 
     # ---- Exact KNN ----

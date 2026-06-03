@@ -88,7 +88,7 @@ def load_scale(es: Elasticsearch, scale: int) -> None:
 
 
 def finalize(es: Elasticsearch) -> None:
-    """Reset refresh interval and force merge for consistent benchmark conditions."""
+    """Reset refresh interval, force-merge to 1 segment, then verify."""
     print("\nFinalizing index...")
     es.indices.put_settings(
         index=INDEX_NAME,
