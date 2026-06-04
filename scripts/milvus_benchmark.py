@@ -36,7 +36,7 @@ from config import (
     SCALES,
     N_QUERIES,
     TOP_K,
-    NUM_CANDIDATES_VARIANTS,
+    MILVUS_EF_VARIANTS,
     CONCURRENCY,
     org_id,
     milvus_collection_name,
@@ -143,6 +143,12 @@ def benchmark_scale(scale: int, run_exact: bool) -> list[dict]:
     qvecs_raw = rng.standard_normal((N_QUERIES, DIMS["v2"])).astype(np.float32)
     qvecs = (qvecs_raw / np.linalg.norm(qvecs_raw, axis=1, keepdims=True)).tolist()
 
+    # Warmup — mirrors benchmark.py: heat JVM/page-cache equivalent (Milvus memory map)
+    N_WARMUP = 5
+    console.print(f"  Warming up ({N_WARMUP} queries)...")
+    for _ in range(N_WARMUP):
+        search_hnsw(hnsw_col, qvecs[0], MILVUS_EF_VARIANTS[0])
+
     rows = []
 
     if run_exact:
@@ -151,7 +157,7 @@ def benchmark_scale(scale: int, run_exact: bool) -> list[dict]:
         tput = run_throughput(qvecs, lambda v: search_flat(flat_col, v))
         rows.append({**lat, "recall": "—", "qps": tput, "scale": scale})
 
-    for ef in NUM_CANDIDATES_VARIANTS:
+    for ef in MILVUS_EF_VARIANTS:
         label = f"HNSW ef={ef}"
         console.print(f"  Running {label}...")
         lat = run_latency(qvecs, label, lambda v, _ef=ef: search_hnsw(hnsw_col, v, _ef))
@@ -217,7 +223,7 @@ def print_table(all_rows: list[dict]) -> None:
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--scale", choices=["10k", "50k", "100k", "all"], default="all")
+    p.add_argument("--scale", choices=["10k", "50k", "100k", "200k", "300k", "500k", "1m", "all"], default="all")
     p.add_argument(
         "--no-exact", action="store_true", help="Skip FLAT exact search and recall"
     )
@@ -231,7 +237,15 @@ def parse_args():
 
 def main() -> None:
     args = parse_args()
-    scale_map = {"10k": [10_000], "50k": [50_000], "100k": [100_000], "all": SCALES}
+    scale_map = {
+        "10k":  [10_000],
+        "50k":  [50_000],
+        "100k": [100_000],
+        "200k": [200_000],
+        "300k": [300_000],
+        "500k": [500_000],
+        "all":  SCALES,
+    }
     targets = scale_map[args.scale]
 
     connections.connect(host=MILVUS_HOST, port=MILVUS_PORT)

@@ -1,9 +1,11 @@
 PYTHON := /home/vietlh/miniconda3/envs/virenv1/bin/python
 
-.PHONY: up down reset setup load load-10k load-50k load-100k benchmark benchmark-quick \
-        up-milvus down-milvus reset-milvus milvus-setup milvus-load milvus-load-10k \
-        milvus-load-50k milvus-load-100k milvus-benchmark milvus-benchmark-quick \
-        milvus-benchmark-ann milvus-status visualize visualize-compare
+.PHONY: up down reset setup load load-10k load-50k load-100k load-200k load-300k load-500k \
+        benchmark benchmark-quick \
+        up-milvus down-milvus reset-milvus milvus-setup milvus-load \
+        milvus-load-10k milvus-load-50k milvus-load-100k milvus-load-200k milvus-load-300k milvus-load-500k \
+        milvus-benchmark milvus-benchmark-quick milvus-benchmark-ann milvus-status \
+        visualize visualize-compare
 
 up:
 	docker compose up -d
@@ -40,9 +42,25 @@ load-50k:
 load-100k:
 	$(PYTHON) scripts/load_data.py --scale 100k
 
+load-200k:
+	$(PYTHON) scripts/load_data.py --scale 200k
+
+load-300k:
+	$(PYTHON) scripts/load_data.py --scale 300k
+
+load-500k:
+	$(PYTHON) scripts/load_data.py --scale 500k
+
+load-1m:
+	$(PYTHON) scripts/load_data.py --scale 1m
+
 # Full benchmark: exact + ANN at all scales (slow — 100k exact takes minutes)
 benchmark:
 	$(PYTHON) scripts/benchmark.py --scale all
+
+# Exact up to 500k, HNSW-only for 1M
+benchmark-mixed:
+	$(PYTHON) scripts/benchmark.py --scale all --no-exact-above 500000
 
 # Quick benchmark: skip exact KNN, 10k only — good for iteration
 benchmark-quick:
@@ -93,6 +111,18 @@ milvus-load-50k:
 
 milvus-load-100k:
 	$(PYTHON) scripts/milvus_load.py --scale 100k
+
+milvus-load-200k:
+	$(PYTHON) scripts/milvus_load.py --scale 200k
+
+milvus-load-300k:
+	$(PYTHON) scripts/milvus_load.py --scale 300k
+
+milvus-load-500k:
+	$(PYTHON) scripts/milvus_load.py --scale 500k
+
+milvus-load-1m:
+	$(PYTHON) scripts/milvus_load.py --scale 1m
 
 # Full benchmark: exact FLAT + HNSW at all scales
 milvus-benchmark:

@@ -8,7 +8,7 @@ services:
       - discovery.type=single-node
       - xpack.security.enabled=false
       - xpack.license.self_generated.type=basic
-      - ES_JAVA_OPTS=-Xms2g -Xmx2g
+      - ES_JAVA_OPTS=-Xms6g -Xmx6g
       - bootstrap.memory_lock=true
     ulimits:
       memlock:
@@ -17,7 +17,7 @@ services:
       nofile:
         soft: 65536
         hard: 65536
-    mem_limit: 8g
+    mem_limit: 16g
     ports:
       - "9200:9200"
     volumes:

@@ -32,7 +32,7 @@ from config import MILVUS_HOST, MILVUS_PORT, DIMS, SCALES, milvus_collection_nam
 HNSW_INDEX = {
     "metric_type": "IP",
     "index_type": "HNSW",
-    "params": {"M": 16, "efConstruction": 100},
+    "params": {"M": 16, "efConstruction": 256},
 }
 
 FLAT_INDEX = {

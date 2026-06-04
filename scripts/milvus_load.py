@@ -32,11 +32,7 @@ from config import (
 )
 
 
-def unit_vectors(n: int, dims: int, seed: int) -> np.ndarray:
-    rng = np.random.default_rng(seed)
-    vecs = rng.standard_normal((n, dims)).astype(np.float32)
-    norms = np.linalg.norm(vecs, axis=1, keepdims=True)
-    return vecs / norms
+CHUNK_SIZE = 10_000  # vectors generated per iteration — peak RAM ≈ 164 MB
 
 
 def load_collection(scale: int, flat: bool = False) -> None:
@@ -56,39 +52,31 @@ def load_collection(scale: int, flat: bool = False) -> None:
         return
 
     oid = org_id(scale)
-    # Use a deterministic seed per scale so HNSW and FLAT collections get the same vectors
-    seed = 1000 + scale
-    print(
-        f"  Generating {scale:,} unit-normalized vectors ({DIMS['v2']}d, seed={seed})..."
-    )
+    seed = 1000 + scale  # deterministic — HNSW and FLAT get identical vectors
+    rng = np.random.default_rng(seed)
+
+    n_chunks = (scale + CHUNK_SIZE - 1) // CHUNK_SIZE
+    print(f"  Streaming {scale:,} vectors in chunks of {CHUNK_SIZE:,} "
+          f"(peak RAM ≈ {CHUNK_SIZE * DIMS['v2'] * 4 / 1e6:.0f} MB)")
+
     t0 = time.perf_counter()
-    vectors = unit_vectors(scale, DIMS["v2"], seed)
-    print(
-        f"  Generated in {time.perf_counter() - t0:.1f}s  ({vectors.nbytes / 1e6:.0f} MB)"
-    )
+    for chunk_idx in tqdm(range(n_chunks), desc=f"  {name}"):
+        chunk_start = chunk_idx * CHUNK_SIZE
+        n = min(CHUNK_SIZE, scale - chunk_start)
 
-    ids = [f"{oid}_prod_{i:07d}" for i in range(scale)]
-    org_ids = [oid] * scale
-    product_ids = [f"prod_{i:07d}" for i in range(scale)]
+        # Generate only this chunk — freed at end of iteration
+        vecs = rng.standard_normal((n, DIMS["v2"])).astype(np.float32)
+        vecs /= np.linalg.norm(vecs, axis=1, keepdims=True)
 
-    print(f"  Inserting into '{name}'...")
-    t1 = time.perf_counter()
-    for start in tqdm(range(0, scale, BULK_BATCH), desc=f"  Bulk ({BULK_BATCH}/batch)"):
-        end = min(start + BULK_BATCH, scale)
-        col.insert(
-            [
-                ids[start:end],
-                org_ids[start:end],
-                product_ids[start:end],
-                vectors[start:end].tolist(),
-            ]
-        )
+        ids         = [f"{oid}_prod_{chunk_start + j:07d}" for j in range(n)]
+        org_ids     = [oid] * n
+        product_ids = [f"prod_{chunk_start + j:07d}" for j in range(n)]
+
+        col.insert([ids, org_ids, product_ids, vecs.tolist()])
 
     col.flush()
-    elapsed = time.perf_counter() - t1
-    total = col.num_entities
-    print(f"  Indexed {total:,} docs in {elapsed:.1f}s  ({scale / elapsed:.0f} docs/s)")
-
+    elapsed = time.perf_counter() - t0
+    print(f"  Indexed {col.num_entities:,} docs in {elapsed:.1f}s  ({scale / elapsed:.0f} docs/s)")
     print(f"  Loading '{name}' into memory...")
     col.load()
     print(f"  Ready.")
@@ -96,7 +84,7 @@ def load_collection(scale: int, flat: bool = False) -> None:
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--scale", choices=["10k", "50k", "100k", "all"], default="all")
+    p.add_argument("--scale", choices=["10k", "50k", "100k", "200k", "300k", "500k", "1m", "all"], default="all")
     p.add_argument(
         "--no-flat", action="store_true", help="Skip FLAT (exact) collections"
     )
@@ -105,7 +93,15 @@ def parse_args():
 
 def main() -> None:
     args = parse_args()
-    scale_map = {"10k": [10_000], "50k": [50_000], "100k": [100_000], "all": SCALES}
+    scale_map = {
+        "10k":  [10_000],
+        "50k":  [50_000],
+        "100k": [100_000],
+        "200k": [200_000],
+        "300k": [300_000],
+        "500k": [500_000],
+        "all":  SCALES,
+    }
     targets = scale_map[args.scale]
 
     connections.connect(host=MILVUS_HOST, port=MILVUS_PORT)

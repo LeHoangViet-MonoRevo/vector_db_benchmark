@@ -295,11 +295,18 @@ def print_table(all_rows: list[dict]) -> None:
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--scale", choices=["10k", "50k", "100k", "all"], default="all")
+    p.add_argument("--scale", choices=["10k", "50k", "100k", "200k", "300k", "500k", "1m", "all"], default="all")
     p.add_argument(
         "--no-exact",
         action="store_true",
-        help="Skip exact KNN (script_score) — much faster but no recall numbers",
+        help="Skip exact KNN (script_score) for all scales",
+    )
+    p.add_argument(
+        "--no-exact-above",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Skip exact KNN for scales larger than N docs (e.g. 500000)",
     )
     p.add_argument(
         "--json",
@@ -313,10 +320,13 @@ def main() -> None:
     args = parse_args()
 
     scale_map = {
-        "10k": [10_000],
-        "50k": [50_000],
+        "10k":  [10_000],
+        "50k":  [50_000],
         "100k": [100_000],
-        "all": SCALES,
+        "200k": [200_000],
+        "300k": [300_000],
+        "500k": [500_000],
+        "all":  SCALES,
     }
     targets = scale_map[args.scale]
 
@@ -325,15 +335,19 @@ def main() -> None:
         console.print(f"[red]ERROR: Cannot reach Elasticsearch at {ES_URL}[/red]")
         sys.exit(1)
 
-    run_exact = not args.no_exact
-
-    if not run_exact:
+    if args.no_exact:
+        console.print("[yellow]Note: --no-exact set. Recall@K will not be computed.[/yellow]")
+    if args.no_exact_above:
         console.print(
-            "[yellow]Note: --no-exact set. Recall@K will not be computed.[/yellow]"
+            f"[yellow]Note: exact KNN skipped for scales > {args.no_exact_above:,} docs.[/yellow]"
         )
 
     all_rows = []
     for scale in targets:
+        run_exact = (
+            not args.no_exact
+            and (args.no_exact_above is None or scale <= args.no_exact_above)
+        )
         rows = benchmark_scale(es, scale, run_exact)
         all_rows.extend(rows)
 

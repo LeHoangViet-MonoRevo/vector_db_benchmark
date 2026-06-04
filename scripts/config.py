@@ -18,7 +18,7 @@ DIMS = {
 }
 
 # Benchmark scales — docs per org
-SCALES = [10_000, 50_000, 100_000]
+SCALES = [10_000, 50_000, 100_000, 200_000, 300_000, 500_000, 1_000_000]
 
 
 # Organization IDs used per scale
@@ -32,8 +32,11 @@ N_QUERIES = 50
 # Top-K results to retrieve
 TOP_K = 100
 
-# HNSW num_candidates variants to test
-NUM_CANDIDATES_VARIANTS = [200, 500]
+# HNSW num_candidates / ef variants to test
+# ES:    num_candidates — tested against pre-filtered org subset
+# Milvus: ef           — tested against the full standalone collection
+NUM_CANDIDATES_VARIANTS = [200, 500]   # ES (pre-filtered, needs nc ≥ k/selectivity)
+MILVUS_EF_VARIANTS      = [200, 500]   # Milvus (standalone collection, ef > k=100 is sufficient)
 
 # Bulk indexing batch size
 BULK_BATCH = 500
