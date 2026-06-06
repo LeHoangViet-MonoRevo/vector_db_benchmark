@@ -32,7 +32,7 @@ from config import (
 )
 
 
-CHUNK_SIZE = 10_000  # vectors generated per iteration — peak RAM ≈ 164 MB
+CHUNK_SIZE = 3_000  # vectors per gRPC insert — 4096-dim float32 = ~49 MB, under 64 MB server limit
 
 
 def load_collection(scale: int, flat: bool = False) -> None:
@@ -48,7 +48,6 @@ def load_collection(scale: int, flat: bool = False) -> None:
     existing = col.num_entities
     if existing >= scale:
         print(f"  {name} ({label}): {existing:,} docs already present — skipping")
-        col.load()
         return
 
     oid = org_id(scale)
@@ -77,9 +76,6 @@ def load_collection(scale: int, flat: bool = False) -> None:
     col.flush()
     elapsed = time.perf_counter() - t0
     print(f"  Indexed {col.num_entities:,} docs in {elapsed:.1f}s  ({scale / elapsed:.0f} docs/s)")
-    print(f"  Loading '{name}' into memory...")
-    col.load()
-    print(f"  Ready.")
 
 
 def parse_args():
@@ -100,6 +96,7 @@ def main() -> None:
         "200k": [200_000],
         "300k": [300_000],
         "500k": [500_000],
+        "1m":   [1_000_000],
         "all":  SCALES,
     }
     targets = scale_map[args.scale]

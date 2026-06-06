@@ -18,12 +18,17 @@ Usage:
 
 import sys
 import os
+import json
 import argparse
+import pathlib
 import time
 import statistics
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
+
+GT_DIR = Path(__file__).parent.parent / "ground_truth"
 
 import numpy as np
 from pymilvus import connections, Collection
@@ -97,12 +102,33 @@ def run_latency(query_vectors: list, method_name: str, search_fn) -> dict:
     }
 
 
-def run_recall(
-    hnsw_col: Collection, flat_col: Collection, query_vectors: list, ef: int
-) -> float:
+def gt_path(scale: int) -> Path:
+    return GT_DIR / f"gt_{scale // 1000}k.json"
+
+
+def load_or_compute_gt(flat_col: Collection, qvecs: list, scale: int, recompute: bool = False) -> list:
+    path = gt_path(scale)
+    if path.exists() and not recompute:
+        console.print(f"  [dim]Ground truth: loading cache from {path.name}[/dim]")
+        with open(path) as f:
+            return json.load(f)
+
+    console.print(f"  Computing ground truth via FLAT ({len(qvecs)} queries)...")
+    gt = []
+    for vec in qvecs:
+        _, ids = search_flat(flat_col, vec)
+        gt.append(ids)
+
+    GT_DIR.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(gt, f)
+    console.print(f"  [green]Ground truth saved → {path.name}[/green]")
+    return gt
+
+
+def run_recall(hnsw_col: Collection, qvecs: list, gt: list, ef: int) -> float:
     recalls = []
-    for vec in query_vectors:
-        _, exact_ids = search_flat(flat_col, vec)
+    for vec, exact_ids in zip(qvecs, gt):
         _, ann_ids = search_hnsw(hnsw_col, vec, ef)
         if not exact_ids:
             continue
@@ -125,37 +151,38 @@ def run_throughput(
 # ---------------------------------------------------------------------------
 
 
-def benchmark_scale(scale: int, run_exact: bool) -> list[dict]:
+def benchmark_scale(scale: int, run_exact: bool, recompute_gt: bool = False) -> list[dict]:
     oid = org_id(scale)
     console.print(f"\n[bold cyan]Scale: {scale:,} docs  (org={oid})[/bold cyan]")
+
+    rng = np.random.default_rng(42)
+    qvecs_raw = rng.standard_normal((N_QUERIES, DIMS["v2"])).astype(np.float32)
+    qvecs = (qvecs_raw / np.linalg.norm(qvecs_raw, axis=1, keepdims=True)).tolist()
+
+    rows = []
+    gt = None
+
+    if run_exact:
+        flat_col = Collection(milvus_collection_name(scale, flat=True))
+        flat_col.load()
+
+        gt = load_or_compute_gt(flat_col, qvecs, scale, recompute=recompute_gt)
+
+        console.print("  Running exact (FLAT)...")
+        lat = run_latency(qvecs, "exact (FLAT)", lambda v: search_flat(flat_col, v))
+        tput = run_throughput(qvecs, lambda v: search_flat(flat_col, v))
+        rows.append({**lat, "recall": "—", "qps": tput, "scale": scale})
+
+        flat_col.release()
 
     hnsw_col = Collection(milvus_collection_name(scale))
     hnsw_col.load()
     console.print(f"  {hnsw_col.num_entities:,} docs in HNSW collection")
 
-    flat_col = None
-    if run_exact:
-        flat_col = Collection(milvus_collection_name(scale, flat=True))
-        flat_col.load()
-
-    # Same query vectors as benchmark.py (seed=42, same distribution)
-    rng = np.random.default_rng(42)
-    qvecs_raw = rng.standard_normal((N_QUERIES, DIMS["v2"])).astype(np.float32)
-    qvecs = (qvecs_raw / np.linalg.norm(qvecs_raw, axis=1, keepdims=True)).tolist()
-
-    # Warmup — mirrors benchmark.py: heat JVM/page-cache equivalent (Milvus memory map)
     N_WARMUP = 5
     console.print(f"  Warming up ({N_WARMUP} queries)...")
     for _ in range(N_WARMUP):
         search_hnsw(hnsw_col, qvecs[0], MILVUS_EF_VARIANTS[0])
-
-    rows = []
-
-    if run_exact:
-        console.print("  Running exact (FLAT)...")
-        lat = run_latency(qvecs, "exact (FLAT)", lambda v: search_flat(flat_col, v))
-        tput = run_throughput(qvecs, lambda v: search_flat(flat_col, v))
-        rows.append({**lat, "recall": "—", "qps": tput, "scale": scale})
 
     for ef in MILVUS_EF_VARIANTS:
         label = f"HNSW ef={ef}"
@@ -164,9 +191,8 @@ def benchmark_scale(scale: int, run_exact: bool) -> list[dict]:
         tput = run_throughput(qvecs, lambda v, _ef=ef: search_hnsw(hnsw_col, v, _ef))
 
         recall = None
-        if run_exact:
-            console.print(f"    Computing recall@{TOP_K} vs FLAT...")
-            recall = run_recall(hnsw_col, flat_col, qvecs, ef)
+        if gt is not None:
+            recall = run_recall(hnsw_col, qvecs, gt, ef)
 
         rows.append(
             {
@@ -177,6 +203,7 @@ def benchmark_scale(scale: int, run_exact: bool) -> list[dict]:
             }
         )
 
+    hnsw_col.release()
     return rows
 
 
@@ -228,6 +255,14 @@ def parse_args():
         "--no-exact", action="store_true", help="Skip FLAT exact search and recall"
     )
     p.add_argument(
+        "--no-exact-above", type=int, default=None, metavar="N",
+        help="Skip FLAT exact search for scales > N docs (e.g. 100000)",
+    )
+    p.add_argument(
+        "--recompute-gt", action="store_true",
+        help="Recompute and overwrite cached ground truth files",
+    )
+    p.add_argument(
         "--json",
         metavar="FILE",
         help="Save raw results to a JSON file (e.g. results/milvus_results.json)",
@@ -244,6 +279,7 @@ def main() -> None:
         "200k": [200_000],
         "300k": [300_000],
         "500k": [500_000],
+        "1m":   [1_000_000],
         "all":  SCALES,
     }
     targets = scale_map[args.scale]
@@ -251,28 +287,32 @@ def main() -> None:
     connections.connect(host=MILVUS_HOST, port=MILVUS_PORT)
     console.print(f"Connected to Milvus at {MILVUS_HOST}:{MILVUS_PORT}")
 
-    run_exact = not args.no_exact
-    if not run_exact:
-        console.print(
-            "[yellow]Note: --no-exact set. Recall@K will not be computed.[/yellow]"
-        )
+    out = pathlib.Path(args.json) if args.json else None
+    if out:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        existing = json.loads(out.read_text()) if out.exists() else []
+    else:
+        existing = []
 
     all_rows = []
     for scale in targets:
-        rows = benchmark_scale(scale, run_exact)
+        run_exact = (
+            not args.no_exact
+            and (args.no_exact_above is None or scale <= args.no_exact_above)
+        )
+        rows = benchmark_scale(scale, run_exact, recompute_gt=args.recompute_gt)
         all_rows.extend(rows)
+
+        if out and rows:
+            # merge: keep existing rows for scales not in this run, replace for current scale
+            merged = [r for r in existing if r["scale"] not in targets] + all_rows
+            with open(out, "w") as f:
+                json.dump(merged, f, indent=2)
+            console.print(f"  [dim]Results saved → {out}[/dim]")
 
     if all_rows:
         console.print()
         print_table(all_rows)
-        if args.json:
-            import json, pathlib
-
-            out = pathlib.Path(args.json)
-            out.parent.mkdir(parents=True, exist_ok=True)
-            with open(out, "w") as f:
-                json.dump(all_rows, f, indent=2)
-            console.print(f"[dim]Results saved → {out}[/dim]")
     else:
         console.print("[yellow]No results. Check that data is loaded.[/yellow]")
 

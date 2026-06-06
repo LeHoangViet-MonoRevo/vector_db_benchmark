@@ -5,6 +5,11 @@ MILVUS_HOST = "localhost"
 MILVUS_PORT = 19530
 
 
+def es_index_name(scale: int) -> str:
+    """Per-org index name — one index per scale, no cross-org HNSW contamination."""
+    return f"raijin_bench_{scale // 1000}k"
+
+
 def milvus_collection_name(scale: int, flat: bool = False) -> str:
     suffix = "_flat" if flat else ""
     return f"raijin_milvus_{scale // 1000}k{suffix}"
